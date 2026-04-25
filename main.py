@@ -89,11 +89,6 @@ def reflect(input_text, result, action):
     return reward
 
 
-# =========================
-# 🧠 MAIN BRAIN LOOP
-# =========================
-
-
 def brain_step(input_text):
     print(f"\n🧠 INPUT: {input_text}")
 
