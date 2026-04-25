@@ -351,8 +351,6 @@ def get_best_action(input_text: str) -> Optional[str]:
     return None
 
 
-# ===================== ATTENTION MODULE =====================
-
 ATTENTION_CAPACITY = 7
 
 attention_window: list[dict] = []
