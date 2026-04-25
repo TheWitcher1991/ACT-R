@@ -1,160 +1,160 @@
 import math
 import random
 import time
+from llm_client import analyze_intent, plan_action, reason
+
+# =========================
+# 🧠 MEMORY
+# =========================
 
 memory = {
-    "capital_france": {
-        "value": "Paris",
-        "base_activation": 0.9,
-        "uses": 5,
-        "last_used": time.time(),
-    },
-    "capital_germany": {
-        "value": "Berlin",
-        "base_activation": 0.7,
-        "uses": 3,
-        "last_used": time.time(),
-    },
+    "capital_france": {"value": "Paris", "uses": 5},
+    "capital_germany": {"value": "Berlin", "uses": 3},
 }
 
-
-goal_stack = []
-
-
-def push_goal(g):
-    goal_stack.append(g)
+working_memory = []
 
 
-def pop_goal():
-    return goal_stack.pop() if goal_stack else None
-
-
-def current_goal():
-    return goal_stack[-1] if goal_stack else None
+# =========================
+# ⚙️ TOOLS
+# =========================
 
 
 def tool_calc(expr):
     try:
-        return eval(expr.replace("calc", "").strip())
+        return eval(expr.replace("calc", "").replace("вычисли", ""))
     except:
         return "error"
 
 
 def tool_search(q):
-    return f"[search result] {q}"
+    from llm_client import chat, client
+    
+    system_prompt = """Ты - поисковая система. Дай краткий ответ на вопрос пользователя."""
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": q}
+    ]
+    
+    return chat(messages)
 
 
-TOOLS = {
-    "calc": tool_calc,
-    "search": tool_search,
-}
-
-
-def decay(chunk):
-    age = time.time() - chunk["last_used"]
-    return math.exp(-age / 40)
-
-
-def activation(chunk):
-    return (chunk["base_activation"] + math.log(chunk["uses"] + 1)) * decay(
-        chunk
-    ) + random.uniform(-0.1, 0.1)
+# =========================
+# 🧠 MEMORY CORE
+# =========================
 
 
 def retrieve(key):
-    if key in memory:
-        chunk = memory[key]
-        return {
-            "value": chunk["value"],
-            "score": activation(chunk),
-        }
-    return {"value": None, "score": 0}
+    return memory.get(key, {"value": None})
 
 
-def normalize(text):
-    text = text.lower().strip()
-
-    if text in ["france", "germany"]:
-        return f"capital_{text}"
-
-    return text
+def update_memory(key, value):
+    memory[key] = {"value": value, "uses": memory.get(key, {}).get("uses", 0) + 1}
 
 
-def cognitive_router(state):
-    text = state["input"]
+# =========================
+# 🧠 ACT-R ROUTER (intelligent)
+# =========================
 
-    if text in ["france", "germany"]:
+
+def router(state):
+    llm = state["llm"]
+
+    if llm.get("needs_memory") == "yes":
         return "memory"
 
-    if text.startswith("capital_"):
-        return "memory"
-
-    if "calc" in text or "search" in text:
+    if llm.get("needs_tools") == "yes":
         return "tool"
 
-    if len(text) > 12:
+    if llm.get("complexity") in ["high", "medium"]:
         return "llm"
 
-    return "fallback"
+    return "llm"
 
 
-def llm_reasoning(prompt):
-    return f"[LLM reasoning]: understood -> {prompt}"
+# =========================
+# 🧠 EXECUTION ENGINE
+# =========================
 
 
-def actr_step(user_input):
-    print(f"\n🧠 INPUT: {user_input}")
+def execute(action, input_text):
 
-    push_goal("answer_question")
-
-    state = {"input": user_input, "goal": current_goal()}
-
-    route = cognitive_router(state)
-
-    result = None
-
-    if route == "memory":
-        key = normalize(user_input)
+    if action == "memory":
+        key = f"capital_{input_text}"
         mem = retrieve(key)
+        return mem["value"]
 
-        if mem["value"]:
-            result = mem["value"]
+    if action == "tool":
+        if "calc" in input_text.lower() or "вычисли" in input_text.lower():
+            return tool_calc(input_text)
+        if "search" in input_text.lower() or "найди" in input_text.lower() or "поиск" in input_text.lower():
+            return tool_search(input_text)
 
-            memory[key]["uses"] += 1
-            memory[key]["last_used"] = time.time()
+    if action == "llm":
+        return reason(input_text)
 
-            print("📚 MEMORY USED")
-        else:
-            result = "unknown"
+    return "I don't know"
 
-    elif route == "tool":
-        if "calc" in user_input:
-            result = tool_calc(user_input)
-            print("🛠 CALC TOOL")
 
-        elif "search" in user_input:
-            result = tool_search(user_input)
-            print("🛠 SEARCH TOOL")
+# =========================
+# 🧠 REFLECTION (CRITICAL PART)
+# =========================
 
-    elif route == "llm":
-        result = llm_reasoning(user_input)
-        print("🤖 LLM USED")
 
-    else:
-        result = "I don't know"
-        print("❓ FALLBACK USED")
+def reflect(input_text, result, action):
 
-    pop_goal()
+    reward = 1.0 if result not in [None, "error", "I don't know"] else 0.2
 
-    print("➡ RESULT:", result)
-    print("🎯 GOAL STACK:", goal_stack)
+    if reward > 0.5:
+        update_memory(f"last_success_{input_text}", result)
+
+    return reward
+
+
+# =========================
+# 🧠 MAIN BRAIN LOOP
+# =========================
+
+
+def brain_step(input_text):
+
+    print(f"\n🧠 INPUT: {input_text}")
+
+    llm_state = analyze_intent(input_text)
+    print(f"📊 INTENT: {llm_state}")
+
+    state = {"input": input_text, "llm": llm_state}
+
+    action = router(state)
+
+    print(f"🎯 ROUTE: {action}")
+
+    plan = plan_action(input_text, llm_state)
+    print(f"🧩 PLAN: {plan}")
+
+    result = execute(action, input_text)
+
+    reward = reflect(input_text, result, action)
+
+    print(f"📊 RESULT: {result}")
+    print(f"⭐ REWARD: {reward}")
+
+    working_memory.append(
+        {"input": input_text, "action": action, "result": result, "reward": reward}
+    )
 
     return result
 
 
-actr_step("france")
-actr_step("france")
-actr_step("germany")
-actr_step("search ai models")
-actr_step("calc 5+7")
-actr_step("explain neural networks")
+# =========================
+# 🚀 RUN LOOP
+# =========================
+
+if __name__ == "__main__":
+    brain_step("Кто такой?")
+    brain_step("France")
+    brain_step("Germany")
+    brain_step("search ai models")
+    brain_step("calc 5+7")
+    brain_step("Объясни нейросети")
