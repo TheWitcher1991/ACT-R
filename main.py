@@ -5,8 +5,15 @@ from llm_client import analyze_intent, plan_action, reason
 from memory import (
     activation,
     add_production,
+    add_skill,
+    attend,
+    attentional_capture,
+    calculate_salience,
     current_goal,
+    get_all_skills_sorted,
+    get_attention_load,
     get_best_action,
+    get_focused,
     goal_stack,
     learn_from_interaction,
     match_production,
@@ -17,7 +24,11 @@ from memory import (
     retrieve,
     retrieve_by_activation,
     retrieve_semantic,
+    retrieve_skill,
+    shift_attention,
     store,
+    strengthen_skill,
+    weaken_skill,
 )
 
 
@@ -41,6 +52,12 @@ def tool_search(q):
 def router(state):
     llm = state["llm"]
     ctx = state.get("context", {})
+    input_text = state.get("input", "")
+
+    skill = retrieve_skill(input_text)
+    if skill:
+        state["learned_skill"] = skill
+        return skill["action"]
 
     prod = match_production(ctx)
     if prod:
@@ -81,18 +98,74 @@ def execute(action, input_text, context=None):
     return result or "I don't know"
 
 
-def reflect(input_text, result, action):
+def reflect(input_text, result, action, state=None):
     reward = 1.0 if result not in [None, "error", "I don't know"] else 0.2
 
     learn_from_interaction(input_text, action, result, reward)
 
+    if state and reward > 0.7:
+        skill = state.get("learned_skill")
+        if skill:
+            strengthen_skill(skill["name"])
+        elif action:
+            add_skill(
+                name=f"skill_{input_text[:20]}", condition=input_text, action=action
+            )
+
+    if state and reward < 0.3:
+        skill = state.get("learned_skill")
+        if skill:
+            weaken_skill(skill["name"])
+
     return reward
+
+
+emotional_state = {
+    "arousal": 0.5,
+    "valence": 0.5,
+    "dominance": 0.5,
+}
+
+working_memory: list = []
+
+
+def export_to_markdown():
+    import json
+    from datetime import datetime
+
+    md = f"# ACT-R Session\n\n**{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**\n\n"
+
+    md += "## Emotional State\n"
+    md += f"- Valence: {emotional_state['valence']:.2f}\n"
+    md += f"- Arousal: {emotional_state['arousal']:.2f}\n"
+    md += f"- Dominance: {emotional_state['dominance']:.2f}\n\n"
+
+    md += "## Memory Stats\n"
+    md += f"- Declarative: {len([k for k in memory.keys() if k.startswith('learned_')])} facts\n"
+    md += f"- Procedural: {len(get_all_skills_sorted())} skills\n"
+    md += f"- Attention: {get_attention_load()}/7\n\n"
+
+    md += "## Recent Inputs\n"
+    for i, wm in enumerate(working_memory):
+        md += f"{i + 1}. **{wm['input']}** → {wm['result']}\n"
+
+    return md
+
+
+def save_session(filename="session.md"):
+    md = export_to_markdown()
+    with open(filename, "w") as f:
+        f.write(md)
+
+
+def update_emotions(reward: float):
+    emotional_state["valence"] = 0.3 + reward * 0.7
+    emotional_state["arousal"] = min(1.0, emotional_state["arousal"] + 0.1)
 
 
 def brain_step(input_text):
     print(f"\n🧠 INPUT: {input_text}")
 
-    # Цель из стека?
     goal = current_goal()
     if goal:
         print(f"🎯 GOAL: {goal['goal']}")
@@ -115,19 +188,30 @@ def brain_step(input_text):
 
     result = execute(action, input_text, state.get("context"))
 
-    reward = reflect(input_text, result, action)
+    reward = reflect(input_text, result, action, state)
 
+    attentional_capture(result)
+    update_emotions(reward)
+
+    working_memory.append({"input": input_text, "result": result})
+    if len(working_memory) > 5:
+        working_memory.pop(0)
+
+    focused = get_focused()
+    emo = emotional_state
     print(f"📊 RESULT: {result}")
     print(f"⭐ REWARD: {reward}")
+    print(f"💭 EMOTIONS: valence={emo['valence']:.2f}, arousal={emo['arousal']:.2f}")
+    skills = get_all_skills_sorted()
+    load = get_attention_load()
     print(
-        f"📚 MEMORY KEYS: {len([k for k in memory.keys() if k.startswith('learned_')])} productions"
+        f"📚 MEMORY: {len([k for k in memory.keys() if k.startswith('learned_')])} facts, {len(skills)} skills, attention {load}/7"
     )
 
     return result
 
 
 def init():
-    """Инициализация системы"""
     store("capital_france", "Paris", "Франция столица Париж")
     store("capital_germany", "Berlin", "Германия столица Берлин")
 
@@ -147,3 +231,5 @@ if __name__ == "__main__":
     brain_step("France")
     brain_step("calc 5+7")
     brain_step("Объясни нейросети")
+    save_session()
+    print("\n📝 Session saved to session.md")

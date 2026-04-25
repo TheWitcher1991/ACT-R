@@ -8,6 +8,12 @@ TAU_DECAY = 1000
 NOISE_MEAN = 0
 NOISE_STD = 0.1
 
+# Procedural Memory Configuration
+PROC_INITIAL_STRENGTH = 0.3
+PROC_STRENGTH_INC = 0.2
+PROC_STRENGTH_DEC = 0.05
+PROC_PRACTICE_BONUS = 0.15
+
 
 def activation(key: str) -> float:
     mem = memory.get(key)
@@ -61,6 +67,9 @@ def compute_embedding(text: str) -> list[float]:
     ]
 
     result = chat(messages, temperature=0.3)
+
+    if not result:
+        return [0.0, 0.0, 0.0]
 
     try:
         import ast
@@ -190,6 +199,113 @@ def match_production(context: dict) -> Optional[dict]:
     return None
 
 
+procedural_memory: dict[str, dict] = {}
+
+
+def add_skill(name: str, condition: str, action: str):
+    """Add a new skill to procedural memory."""
+    procedural_memory[name] = {
+        "name": name,
+        "condition": condition,
+        "action": action,
+        "strength": PROC_INITIAL_STRENGTH,
+        "created": time.time(),
+        "last_used": time.time(),
+        "uses": 0,
+    }
+
+
+def get_skill_strength(skill: dict) -> float:
+    """Compute activation (strength) for a skill using ACT-R formula:
+    S = strength * e^(-time_since_use/τ) + noise
+    """
+    S = skill.get("strength", PROC_INITIAL_STRENGTH)
+    last_used = skill.get("last_used", time.time())
+    time_since = time.time() - last_used
+    decay = math.exp(-time_since / TAU_DECAY)
+    noise = random.gauss(NOISE_MEAN, NOISE_STD)
+    return S * decay + noise
+
+
+def strengthen_skill(skill_name: str):
+    """Strengthen a skill after successful use."""
+    skill = procedural_memory.get(skill_name)
+    if skill:
+        skill["strength"] = min(1.0, skill["strength"] + PROC_STRENGTH_INC)
+        skill["uses"] += 1
+        skill["last_used"] = time.time()
+
+
+def weaken_skill(skill_name: str):
+    """Weaken a skill after failed use."""
+    skill = procedural_memory.get(skill_name)
+    if skill:
+        skill["strength"] = max(0.0, skill["strength"] - PROC_STRENGTH_DEC)
+
+
+def practice_skill(skill_name: str):
+    """Practice a skill to strengthen it (practice bonus)."""
+    skill = procedural_memory.get(skill_name)
+    if skill:
+        skill["strength"] = min(1.0, skill["strength"] + PROC_PRACTICE_BONUS)
+
+
+def retrieve_skill(condition: str, threshold: float = 0.2) -> Optional[dict]:
+    """Retrieve best matching skill by condition similarity."""
+    best_skill = None
+    best_activation = -float("inf")
+
+    for skill in procedural_memory.values():
+        if condition in skill.get("condition", ""):
+            A = get_skill_strength(skill)
+            if A > best_activation and A >= threshold:
+                best_activation = A
+                best_skill = skill
+
+    if best_skill:
+        best_skill["uses"] += 1
+        best_skill["last_used"] = time.time()
+
+    return best_skill
+
+
+def retrieve_best_skill() -> Optional[dict]:
+    """Retrieve skill with highest activation."""
+    best_skill = None
+    best_A = -float("inf")
+
+    for skill in procedural_memory.values():
+        A = get_skill_strength(skill)
+        if A > best_A:
+            best_A = A
+            best_skill = skill
+
+    return best_skill if best_skill else None
+
+
+def get_all_skills_sorted() -> list[tuple[str, dict]]:
+    """Get all skills sorted by strength (descending)."""
+    results = []
+    for name, skill in procedural_memory.items():
+        A = get_skill_strength(skill)
+        results.append((name, skill, A))
+
+    results.sort(key=lambda x: x[2], reverse=True)
+    return results
+
+
+def clear_skill(skill_name: str):
+    """Remove a skill from procedural memory."""
+    if skill_name in procedural_memory:
+        del procedural_memory[skill_name]
+
+
+add_skill(name="calculate", condition="math expression", action="use_calculator")
+add_skill(
+    name="search_info", condition="what is, who is, where is", action="search_web"
+)
+
+
 history: list[dict] = []
 
 
@@ -233,3 +349,62 @@ def get_best_action(input_text: str) -> Optional[str]:
                     return h["action"]
 
     return None
+
+
+# ===================== ATTENTION MODULE =====================
+
+ATTENTION_CAPACITY = 7
+
+attention_window: list[dict] = []
+focused_item: Optional[dict] = None
+
+
+def attend(item: Any):
+    global focused_item
+
+    attention_window.insert(
+        0, {"item": item, "salience": 1.0, "timestamp": time.time()}
+    )
+
+    if len(attention_window) > ATTENTION_CAPACITY:
+        attention_window.pop()
+
+    focused_item = attention_window[0]
+
+
+def calculate_salience(
+    item: Any, novelty: float = 0.5, relevance: float = 0.5, size: float = 0.5
+) -> float:
+    return novelty * 0.3 + relevance * 0.4 + (1 - size) * 0.3
+
+
+def attentional_capture(stimulus: Any):
+    salience = calculate_salience(stimulus)
+    if salience > 0.7:
+        attend(stimulus)
+        return True
+    return False
+
+
+def shift_attention(to_index: int = 0):
+    global focused_item
+    if 0 <= to_index < len(attention_window):
+        focused_item = attention_window[to_index]
+
+
+def clear_attention():
+    global attention_window, focused_item
+    attention_window.clear()
+    focused_item = None
+
+
+def get_focused() -> Optional[dict]:
+    return focused_item
+
+
+def get_attention_capacity() -> int:
+    return ATTENTION_CAPACITY
+
+
+def get_attention_load() -> int:
+    return len(attention_window)
